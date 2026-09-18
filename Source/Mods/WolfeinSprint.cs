@@ -1,4 +1,5 @@
 ﻿using HarmonyLib;
+using Multiplayer.Compat;
 using Verse;
 using Verse.AI;
 
@@ -9,40 +10,32 @@ namespace MultiplayerWolfeinRacePatch.Source.Mods;
 /// </summary>
 public class WolfeinSprintPatch
 {
-    private const string LogPrefix =
-        "[Multiplayer Wolfein Race Sprint Patch]";
+    private const string LogPrefix = "[Multiplayer Wolfein Race Sprint Patch]";
 
-    private const string SprintVerbTypeName =
-        "Wolfein.Verb_CastAbilitySprint";
-
-    private const string CastJumpJobDefName =
-        "CastJump";
+    private const string AbilitySprintName = "Wolfein.Verb_CastAbilitySprint";
+    private const string CastJumpJobDefName = "CastJump";
 
     /// <summary>
     ///     Harmony Patch
     /// </summary>
     public static void Patch()
     {
-        var _harmony = new Harmony(
-            "MultiplayerWolfeinSprintPatch");
-
-        PatchJobExposeData(_harmony);
-        PatchStartNextToil(_harmony);
+        PatchJobExposeData();
+        PatchStartNextToil();
     }
 
-    private static void PatchJobExposeData(Harmony _harmony)
+    private static void PatchJobExposeData()
     {
         var _method =
             AccessTools.Method(typeof(Job), "ExposeData");
 
         if (_method == null)
         {
-            Log.Error(
-                $"{LogPrefix} Could not find Verse.AI.Job.ExposeData().");
+            Log.Error($"{LogPrefix} Could not find Verse.AI.Job.ExposeData().");
             return;
         }
 
-        _harmony.Patch(
+        MpCompat.harmony.Patch(
             _method,
             new HarmonyMethod(
                 typeof(WolfeinSprintPatch),
@@ -51,39 +44,28 @@ public class WolfeinSprintPatch
                 typeof(WolfeinSprintPatch),
                 nameof(JobExposeDataPostfix)));
 
-        Log.Message(
-            $"{LogPrefix} Patched Verse.AI.Job.ExposeData().");
+        Log.Message($"{LogPrefix} Patched Verse.AI.Job.ExposeData().");
     }
 
-    private static void PatchStartNextToil(Harmony _harmony)
+    private static void PatchStartNextToil()
     {
-        var _method =
-            AccessTools.Method(
-                typeof(JobDriver),
-                "TryActuallyStartNextToil");
-
+        var _method = AccessTools.Method(typeof(JobDriver), "TryActuallyStartNextToil");
         if (_method == null)
         {
-            Log.Error(
-                $"{LogPrefix} Could not find " +
-                "JobDriver.TryActuallyStartNextToil().");
+            Log.Error($"{LogPrefix} Could not find " + "JobDriver.TryActuallyStartNextToil().");
             return;
         }
 
-        _harmony.Patch(
+        MpCompat.harmony.Patch(
             _method,
             new HarmonyMethod(
                 typeof(WolfeinSprintPatch),
                 nameof(TryActuallyStartNextToilPrefix)));
 
-        Log.Message(
-            $"{LogPrefix} Patched " +
-            "Verse.AI.JobDriver.TryActuallyStartNextToil().");
+        Log.Message($"{LogPrefix} Patched " + "Verse.AI.JobDriver.TryActuallyStartNextToil().");
     }
 
-    private static void JobExposeDataPrefix(
-        Job __instance,
-        out SavedVerbState __state)
+    private static void JobExposeDataPrefix(Job __instance, out SavedVerbState __state)
     {
         __state = null;
 
@@ -95,7 +77,7 @@ public class WolfeinSprintPatch
 
         var _verb = __instance.verbToUse;
 
-        if (_verb == null)
+        if (!IsSprintVerb(_verb))
             return;
 
         __instance.verbToUse = null;
@@ -107,8 +89,7 @@ public class WolfeinSprintPatch
         };
     }
 
-    private static void JobExposeDataPostfix(
-        SavedVerbState __state)
+    private static void JobExposeDataPostfix(SavedVerbState __state)
     {
         if (Scribe.mode != LoadSaveMode.Saving)
             return;
@@ -117,23 +98,12 @@ public class WolfeinSprintPatch
             __state.Job.verbToUse = __state.Verb;
     }
 
-    private static void TryActuallyStartNextToilPrefix(
-        JobDriver __instance)
+    private static void TryActuallyStartNextToilPrefix(JobDriver __instance)
     {
         if (!IsCastJumpDriver(__instance))
             return;
 
         EnsureSprintVerb(__instance);
-    }
-
-    private static bool IsCastJumpJob(Job _job)
-    {
-        return _job?.def?.defName == CastJumpJobDefName;
-    }
-
-    private static bool IsCastJumpDriver(JobDriver _driver)
-    {
-        return IsCastJumpJob(_driver?.job);
     }
 
     private static void EnsureSprintVerb(JobDriver _driver)
@@ -150,8 +120,7 @@ public class WolfeinSprintPatch
 
         if (_pawn == null)
         {
-            Log.Warning(
-                $"{LogPrefix} CastJump has no pawn.");
+            Log.Warning($"{LogPrefix} CastJump has no pawn.");
             return;
         }
 
@@ -159,17 +128,11 @@ public class WolfeinSprintPatch
 
         if (_sprintVerb == null)
         {
-            Log.Warning(
-                $"{LogPrefix} Could not find Sprint verb for " +
-                $"{_pawn.LabelShort}.");
+            Log.Warning($"{LogPrefix} Could not find Sprint Jump verb for " + $"{_pawn.LabelShort}.");
             return;
         }
 
         _job.verbToUse = _sprintVerb;
-
-        Log.Message(
-            $"{LogPrefix} Restored Sprint verb for " +
-            $"{_pawn.LabelShort}.");
     }
 
     private static Verb FindSprintVerb(Pawn _pawn)
@@ -181,14 +144,26 @@ public class WolfeinSprintPatch
         {
             var _verb = _ability?.verb;
 
-            if (_verb == null)
-                continue;
-
-            if (_verb.GetType().FullName == SprintVerbTypeName)
+            if (IsSprintVerb(_verb))
                 return _verb;
         }
 
         return null;
+    }
+
+    private static bool IsSprintVerb(Verb _verb)
+    {
+        return _verb?.GetType().FullName == AbilitySprintName;
+    }
+
+    private static bool IsCastJumpJob(Job _job)
+    {
+        return _job?.def?.defName == CastJumpJobDefName;
+    }
+
+    private static bool IsCastJumpDriver(JobDriver _driver)
+    {
+        return IsCastJumpJob(_driver?.job);
     }
 
     private sealed class SavedVerbState
