@@ -13,6 +13,7 @@ public class WolfeinSprintPatch
     private const string LogPrefix = "[Multiplayer Wolfein Race Sprint Patch]";
 
     private const string AbilitySprintName = "Wolfein.Verb_CastAbilitySprint";
+    private const string WolfeinSprintAbilityDefName = "Wolfein_Sprint";
     private const string CastJumpJobDefName = "CastJump";
 
     /// <summary>
@@ -117,15 +118,16 @@ public class WolfeinSprintPatch
             return;
 
         var _pawn = _driver.pawn;
-
         if (_pawn == null)
         {
             Log.Warning($"{LogPrefix} CastJump has no pawn.");
             return;
         }
 
-        var _sprintVerb = FindSprintVerb(_pawn);
+        if (!HasWolfeinSprintAbility(_pawn))
+            return;
 
+        var _sprintVerb = FindSprintVerb(_pawn);
         if (_sprintVerb == null)
         {
             Log.Warning($"{LogPrefix} Could not find Sprint Jump verb for " + $"{_pawn.LabelShort}.");
@@ -149,6 +151,18 @@ public class WolfeinSprintPatch
         }
 
         return null;
+    }
+
+    private static bool HasWolfeinSprintAbility(Pawn _pawn)
+    {
+        if (_pawn?.abilities?.abilities == null)
+            return false;
+
+        foreach (var _ability in _pawn.abilities.abilities)
+            if (_ability?.def?.defName == WolfeinSprintAbilityDefName)
+                return true;
+
+        return false;
     }
 
     private static bool IsSprintVerb(Verb _verb)
