@@ -1,14 +1,18 @@
 ﻿using HarmonyLib;
 using Multiplayer.Compat;
-using RimWorld;
 using Verse;
 
-namespace Multiplayer_Wolfein_Race_Patch.Source.Mods;
+namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
-public class WolfeinIncidentPatch
+/// <summary>
+///     Syncs Wolfein incident workers (Drone Raid).
+///     Uses the standard Multiplayer-Compatibility pattern
+///     (PatchingUtilities.PatchPushPopRand, see AlphaBiomes)
+///     instead of a hand-rolled seeded Rand.PushState.
+/// </summary>
+public class WolfeinIncident
 {
-    private const string LogPrefix =
-        "[Multiplayer Wolfein Race Incident Patch]";
+    private const string LogPrefix = "[Multiplayer Wolfein Race Incident Patch]";
 
     public static void Patch()
     {
@@ -17,75 +21,23 @@ public class WolfeinIncidentPatch
 
     private static void DroneRaidPatch()
     {
-        var _incidentType = AccessTools.TypeByName(
-            "Wolfein.IncidentWorker_DroneRaid");
+        const string method = "Wolfein.IncidentWorker_DroneRaid:TryExecuteWorker";
 
-        if (_incidentType == null)
+        var target = AccessTools.DeclaredMethod(method) ?? AccessTools.Method(method);
+
+        if (target == null)
         {
-            Log.Warning(
-                $"{LogPrefix} Could not find " +
-                "Wolfein.IncidentWorker_DroneRaid.");
+            Log.Warning($"{LogPrefix} Could not find {method}.");
 
             return;
         }
 
-        var _tryExecuteWorker = AccessTools.Method(
-            _incidentType,
-            "TryExecuteWorker",
-            [
-                typeof(IncidentParms)
-            ]);
+        // Surrounds TryExecuteWorker with Rand.PushState/PopState so the
+        // PawnGenerator/CellFinder/Rand calls inside don't leak into (or read
+        // a diverged) global Rand state. All clients execute the incident with
+        // the same parms, so the isolated sequence stays deterministic.
+        PatchingUtilities.PatchPushPopRand(target);
 
-        if (_tryExecuteWorker == null)
-        {
-            Log.Warning(
-                $"{LogPrefix} Could not find " +
-                "TryExecuteWorker(IncidentParms).");
-
-            return;
-        }
-
-        MpCompat.harmony.Patch(
-            _tryExecuteWorker,
-            new HarmonyMethod(
-                typeof(WolfeinIncidentPatch),
-                nameof(DroneRaidSeededPrefix)),
-            finalizer: new HarmonyMethod(
-                typeof(WolfeinIncidentPatch),
-                nameof(DroneRaidSeededFinalizer)));
-    }
-
-    private static void DroneRaidSeededPrefix(IncidentParms parms)
-    {
-        int _seed;
-
-        if (parms.target is Map _map)
-        {
-            _seed = Gen.HashCombineInt(
-                _map.uniqueID,
-                Find.TickManager.TicksGame);
-
-            _seed = Gen.HashCombineInt(
-                _seed,
-                parms.spawnCenter.GetHashCode());
-
-            _seed = Gen.HashCombineInt(
-                _seed,
-                parms.points.GetHashCode());
-        }
-        else
-        {
-            _seed = Find.TickManager.TicksGame;
-        }
-
-        Rand.PushState(_seed);
-    }
-
-    private static Exception DroneRaidSeededFinalizer(Exception __exception, bool __state)
-    {
-        if (__state)
-            Rand.PopState();
-
-        return __exception;
+        Log.Message($"{LogPrefix} Patched IncidentWorker_DroneRaid.TryExecuteWorker().");
     }
 }

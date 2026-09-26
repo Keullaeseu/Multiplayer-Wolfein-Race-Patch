@@ -1,32 +1,20 @@
-﻿using System.Reflection;
-using HarmonyLib;
-using Multiplayer_Wolfein_Race_Patch.Source.Mods;
-using Multiplayer.API;
-using Multiplayer.Compat;
+﻿using Multiplayer.Compat;
 using Verse;
 
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
 /// <summary>
-///     Multiplayer Patch for Wolfein Race by MelonDove, Ancot, Last Update: 12 Sep @ 1:58pm 2026
+///     Multiplayer Patch for Wolfein Race by MelonDove, Ancot, Last Update: 23 Sep @ 6:07pm 2026
 ///     https://steamcommunity.com/sharedfiles/filedetails/?id=3473140562
+///     Entry point: schedules <see cref="LatePatch" /> once mods are loaded,
+///     which delegates to one patch class per Wolfein feature.
 /// </summary>
 [MpCompatFor("MelonDove.WolfeinRace")]
-public class WolfeinRacePatch
+public class WolfeinRace
 {
-    private const string LogPrefix =
-        "[Multiplayer Wolfein Race Patch]";
+    private const string LogPrefix = "[Multiplayer Wolfein Race Patch]";
 
-    private const string CompCauseHediffArtificialMoonApparatus =
-        "Wolfein.CompCauseHediff_ArtificialMoonApparatus";
-
-    private const string CompThingContainerIntegratedRepairUnit =
-        "Wolfein.CompThingContainer_IntegratedRepairUnit";
-
-    private const string CompChargeEnergyShield =
-        "Wolfein.CompChargeEnergyShield";
-
-    public WolfeinRacePatch(ModContentPack _content)
+    public WolfeinRace(ModContentPack content)
     {
         LongEventHandler.ExecuteWhenFinished(LatePatch);
     }
@@ -35,109 +23,31 @@ public class WolfeinRacePatch
     {
         Log.Message($"{LogPrefix} Initializing...");
 
-        RegisterEnergyShield();
-        RegisterIntegratedRepairUnit();
-        RegisterArtificialMoonToggle();
+        // Each block is isolated: a bad lambda ordinal in one Wolfein update
+        // must not prevent the remaining patches from registering.
+        SafePatch(WolfeinEnergyShield.Patch);
+        SafePatch(WolfeinRepairUnit.Patch);
+        SafePatch(WolfeinArtificialMoon.Patch);
 
-        WolfeinSprintPatch.Patch();
-        WolfeinRandomPatch.Patch();
-        WolfeinIncidentPatch.Patch();
+        SafePatch(WolfeinSprint.Patch);
+        SafePatch(WolfeinRandom.Patch);
+        SafePatch(WolfeinIncident.Patch);
+        SafePatch(WolfeinToolSwitcher.Patch);
+        SafePatch(WolfeinTurret.Patch);
+        SafePatch(WolfeinFloatMenus.Patch);
 
         Log.Message($"{LogPrefix} Initialized.");
     }
 
-    #region Registers
-
-    /// <summary>
-    ///     Energy Shield
-    /// </summary>
-    private static void RegisterEnergyShield()
+    private static void SafePatch(Action patch)
     {
-        var _energyShieldType = AccessTools.TypeByName(CompChargeEnergyShield);
-
-        if (_energyShieldType == null)
+        try
         {
-            Log.Warning(
-                $"{LogPrefix} Could not find {CompChargeEnergyShield}.");
-
-            return;
+            patch();
         }
-
-        MpCompat.RegisterLambdaMethod(
-            _energyShieldType,
-            "CompGetWornGizmosExtra", 0);
-    }
-
-    /// <summary>
-    ///     Rest Pod
-    /// </summary>
-    private static void RegisterIntegratedRepairUnit()
-    {
-        var _restPodType = AccessTools.TypeByName(CompThingContainerIntegratedRepairUnit);
-
-        if (_restPodType == null)
+        catch (Exception exception)
         {
-            Log.Warning(
-                $"{LogPrefix} Could not find {CompThingContainerIntegratedRepairUnit}.");
-
-            return;
+            Log.Error($"{LogPrefix} Patch {patch.Method.Name} failed: {exception}");
         }
-
-        MpCompat.RegisterLambdaMethod(
-            _restPodType,
-            "CompGetGizmosExtra", 0, 1);
     }
-
-    /// <summary>
-    ///     Artificial Moon
-    /// </summary>
-    private static void RegisterArtificialMoonToggle()
-    {
-        var _compType = AccessTools.TypeByName(CompCauseHediffArtificialMoonApparatus);
-
-        if (_compType == null)
-        {
-            Log.Warning(
-                $"{LogPrefix} Could not find {CompCauseHediffArtificialMoonApparatus}.");
-
-            return;
-        }
-
-        var _toggleMethod =
-            FindArtificialMoonToggleMethod(_compType);
-
-        if (_toggleMethod == null)
-        {
-            Log.Warning(
-                $"{LogPrefix} Could not find the generated " +
-                "Artificial Moon toggle method.");
-
-            return;
-        }
-
-        MP.RegisterSyncMethod(_toggleMethod);
-
-        Log.Message(
-            $"{LogPrefix} Registered sync method " +
-            $"{_toggleMethod.Name}.");
-    }
-
-    private static MethodInfo FindArtificialMoonToggleMethod(
-        Type _compType)
-    {
-        return _compType
-            .GetMethods(
-                BindingFlags.Instance |
-                BindingFlags.NonPublic |
-                BindingFlags.Public |
-                BindingFlags.DeclaredOnly)
-            .FirstOrDefault(_method =>
-                _method.Name.StartsWith(
-                    "<CompGetGizmosExtra>b__",
-                    StringComparison.Ordinal) &&
-                _method.ReturnType == typeof(void) &&
-                _method.GetParameters().Length == 0);
-    }
-
-    #endregion
 }

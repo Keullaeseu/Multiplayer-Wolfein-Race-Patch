@@ -1,18 +1,22 @@
 ﻿using HarmonyLib;
 using Multiplayer.Compat;
 using Verse;
+using Random = UnityEngine.Random;
 
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
 /// <summary>
-///     Patch Wolfein Random
+///     Patch Wolfein Random usage:
+///     - GenStep SeedPart must not consume synced Verse.Rand (map-gen seed
+///     would depend on current Rand state and diverge across clients).
+///     - CompAdditionalGraphic.randTime is a pure visual bobbing offset,
+///     so it must not consume synced Verse.Rand either. Redirect it to
+///     UnityEngine.Random (unsynced, main-thread cosmetic), the standard
+///     approach for visual-only randomness.
 /// </summary>
-public class WolfeinRandomPatch
+public class WolfeinRandom
 {
-    private const string LogPrefix =
-        "[Multiplayer Wolfein Race Random Patch]";
-
-    private static readonly Random CosmeticRandom = new();
+    private const string LogPrefix = "[Multiplayer Wolfein Race Random Patch]";
 
     public static void Patch()
     {
@@ -21,70 +25,89 @@ public class WolfeinRandomPatch
 
     private static void PatchRandom()
     {
-        var _genStepGenPawnAroundMapCenterDefendBaseType =
-            AccessTools.TypeByName("Wolfein.GenStep_GenPawnAroundMapCenter_DefendBase");
-        var _seedPartMethodInfo = _genStepGenPawnAroundMapCenterDefendBaseType != null
-            ? AccessTools.DeclaredPropertyGetter(_genStepGenPawnAroundMapCenterDefendBaseType, "SeedPart")
+        var genStepType = AccessTools.TypeByName("Wolfein.GenStep_GenPawnAroundMapCenter_DefendBase");
+        var seedPartMethodInfo = genStepType != null
+            ? AccessTools.DeclaredPropertyGetter(genStepType, "SeedPart")
             : null;
-        if (_seedPartMethodInfo == null)
+        if (seedPartMethodInfo == null)
         {
-            Log.Error(
-                $"{LogPrefix} Could not find Wolfein.GenStep_GenPawnAroundMapCenter_DefendBase:SeedPart.");
+            Log.Error($"{LogPrefix} Could not find Wolfein.GenStep_GenPawnAroundMapCenter_DefendBase:SeedPart.");
             return;
         }
 
-        MpCompat.harmony.Patch(_seedPartMethodInfo,
-            new HarmonyMethod(typeof(WolfeinRandomPatch), "SeedPartStatic"));
+        MpCompat.harmony.Patch(seedPartMethodInfo,
+            new HarmonyMethod(typeof(WolfeinRandom), nameof(SeedPartStatic)));
 
-        var _compAdditionalGraphicType = AccessTools.TypeByName("Wolfein.CompAdditionalGraphic");
-        var _compAdditionalGraphicConstructorInfo = _compAdditionalGraphicType != null
-            ? AccessTools.DeclaredConstructor(_compAdditionalGraphicType, Type.EmptyTypes)
+        var compAdditionalGraphicType = AccessTools.TypeByName("Wolfein.CompAdditionalGraphic");
+        var compAdditionalGraphicConstructorInfo = compAdditionalGraphicType != null
+            ? AccessTools.DeclaredConstructor(compAdditionalGraphicType, Type.EmptyTypes)
             : null;
-        if (_compAdditionalGraphicConstructorInfo == null)
+        if (compAdditionalGraphicConstructorInfo == null)
         {
-            Log.Error(
-                $"{LogPrefix} Could not find Wolfein.CompAdditionalGraphic.");
-
+            Log.Error($"{LogPrefix} Could not find Wolfein.CompAdditionalGraphic.");
             return;
         }
 
-        MpCompat.harmony.Patch(_compAdditionalGraphicConstructorInfo,
-            transpiler: new HarmonyMethod(typeof(WolfeinRandomPatch), "RemoveRandomFromAdditionalGraphicCtor"));
+        MpCompat.harmony.Patch(compAdditionalGraphicConstructorInfo,
+            transpiler: new HarmonyMethod(typeof(WolfeinRandom), nameof(RemoveSyncedRandFromAdditionalGraphicCtor)));
     }
 
-    // GenStep_GenPawnAroundMapCenter_DefendBase SeedPart (original seed is 341125487)
+    // GenStep_GenPawnAroundMapCenter_DefendBase SeedPart (original: 341125487 + Rand.Range(0, 99999)).
+    // SeedPart is used to derive the map-gen seed; consuming synced Rand here
+    // makes the seed depend on whatever Rand state each client happens to have.
+    // A constant keeps map generation deterministic across clients.
     private static bool SeedPartStatic(ref int __result)
     {
         __result = 341125487;
         return false;
     }
 
-    private static IEnumerable<CodeInstruction> RemoveRandomFromAdditionalGraphicCtor(
-        IEnumerable<CodeInstruction> _instructions)
+    private static IEnumerable<CodeInstruction> RemoveSyncedRandFromAdditionalGraphicCtor(
+        IEnumerable<CodeInstruction> instructions)
     {
-        var _randomRange = AccessTools.Method(typeof(Rand), "Range", [
+        var instructionsList = instructions.ToList();
+
+        var syncedRange = AccessTools.Method(typeof(Rand), nameof(Rand.Range), [
             typeof(float),
             typeof(float)
         ]);
-        var _cosmeticRange = AccessTools.Method(typeof(WolfeinRandomPatch), "CosmeticFloatRange");
-        if (_randomRange == null || _cosmeticRange == null)
+        var cosmeticRange = AccessTools.Method(typeof(WolfeinRandom), nameof(CosmeticFloatRange));
+
+        // Never wipe the constructor body on failure: yield the original
+        // instructions unmodified so the comp still initializes correctly.
+        if (syncedRange == null || cosmeticRange == null)
         {
-            Log.Error(
-                $"{LogPrefix} Could not find the Random Range methods.");
+            Log.Error($"{LogPrefix} Could not find the Random Range methods, " +
+                      "leaving CompAdditionalGraphic constructor unpatched.");
+
+            foreach (var original in instructionsList)
+                yield return original;
 
             yield break;
         }
 
-        foreach (var _instruction in _instructions)
+        var patched = false;
+
+        foreach (var instruction in instructionsList)
         {
-            if (_instruction.Calls(_randomRange))
-                _instruction.operand = _cosmeticRange;
-            yield return _instruction;
+            if (instruction.Calls(syncedRange))
+            {
+                instruction.operand = cosmeticRange;
+                patched = true;
+            }
+
+            yield return instruction;
         }
+
+        if (!patched)
+            Log.Warning($"{LogPrefix} No synced Rand.Range found in CompAdditionalGraphic constructor.");
     }
 
-    private static float CosmeticFloatRange(float _minimum, float _maximum)
+    // Visual-only bobbing offset (floatOffset in CompTick). Must not touch
+    // synced Verse.Rand. UnityEngine.Random is unsynced and safe for main-thread
+    // cosmetic use; divergence here only affects the shimmer phase, not the sim.
+    private static float CosmeticFloatRange(float minimum, float maximum)
     {
-        return (float)(CosmeticRandom.NextDouble() * (_maximum - (double)_minimum)) + _minimum;
+        return Random.Range(minimum, maximum);
     }
 }

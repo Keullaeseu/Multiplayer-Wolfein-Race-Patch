@@ -6,9 +6,15 @@ using Verse.AI;
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
 /// <summary>
-///     Patch Wolfein Sprint ability to work with Multiplayer
+///     Patch Wolfein Sprint ability (Wolfein.Verb_CastAbilitySprint, a
+///     CastJump-based jump ability) to behave in Multiplayer.
+///     Ability casting + CastJump jobs are synced by Multiplayer core, so no
+///     gizmo sync is needed here. This is only a deterministic safety net:
+///     if a CastJump job ever arrives without its sprint verb (e.g. after a
+///     save/load cycle or a missed verb sync), re-attach the pawn's sprint
+///     verb deterministically instead of erroring.
 /// </summary>
-public class WolfeinSprintPatch
+public class WolfeinSprint
 {
     private const string LogPrefix = "[Multiplayer Wolfein Race Sprint Patch]";
 
@@ -21,168 +27,108 @@ public class WolfeinSprintPatch
     /// </summary>
     public static void Patch()
     {
-        PatchJobExposeData();
         PatchStartNextToil();
-    }
-
-    private static void PatchJobExposeData()
-    {
-        var _method =
-            AccessTools.Method(typeof(Job), "ExposeData");
-
-        if (_method == null)
-        {
-            Log.Error($"{LogPrefix} Could not find Verse.AI.Job.ExposeData().");
-            return;
-        }
-
-        MpCompat.harmony.Patch(
-            _method,
-            new HarmonyMethod(
-                typeof(WolfeinSprintPatch),
-                nameof(JobExposeDataPrefix)),
-            new HarmonyMethod(
-                typeof(WolfeinSprintPatch),
-                nameof(JobExposeDataPostfix)));
-
-        Log.Message($"{LogPrefix} Patched Verse.AI.Job.ExposeData().");
     }
 
     private static void PatchStartNextToil()
     {
-        var _method = AccessTools.Method(typeof(JobDriver), "TryActuallyStartNextToil");
-        if (_method == null)
+        var method = AccessTools.Method(typeof(JobDriver), nameof(JobDriver.TryActuallyStartNextToil));
+        if (method == null)
         {
             Log.Error($"{LogPrefix} Could not find " + "JobDriver.TryActuallyStartNextToil().");
             return;
         }
 
         MpCompat.harmony.Patch(
-            _method,
+            method,
             new HarmonyMethod(
-                typeof(WolfeinSprintPatch),
+                typeof(WolfeinSprint),
                 nameof(TryActuallyStartNextToilPrefix)));
 
         Log.Message($"{LogPrefix} Patched " + "Verse.AI.JobDriver.TryActuallyStartNextToil().");
     }
 
-    private static void JobExposeDataPrefix(Job __instance, out SavedVerbState __state)
-    {
-        __state = null;
-
-        if (!IsCastJumpJob(__instance))
-            return;
-
-        if (Scribe.mode != LoadSaveMode.Saving)
-            return;
-
-        var _verb = __instance.verbToUse;
-
-        if (!IsSprintVerb(_verb))
-            return;
-
-        __instance.verbToUse = null;
-
-        __state = new SavedVerbState
-        {
-            Job = __instance,
-            Verb = _verb
-        };
-    }
-
-    private static void JobExposeDataPostfix(SavedVerbState __state)
-    {
-        if (Scribe.mode != LoadSaveMode.Saving)
-            return;
-
-        if (__state?.Job != null)
-            __state.Job.verbToUse = __state.Verb;
-    }
-
     private static void TryActuallyStartNextToilPrefix(JobDriver __instance)
     {
+        // No MP check needed: this runs in the sim on all clients, is fully
+        // deterministic (iterates the pawn's own ability list), and only fills
+        // in a missing verb. It never consumes Rand or touches the UI.
         if (!IsCastJumpDriver(__instance))
             return;
 
         EnsureSprintVerb(__instance);
     }
 
-    private static void EnsureSprintVerb(JobDriver _driver)
+    private static void EnsureSprintVerb(JobDriver driver)
     {
-        var _job = _driver.job;
+        var job = driver.job;
 
-        if (!IsCastJumpJob(_job))
+        if (!IsCastJumpJob(job))
             return;
 
-        if (_job.verbToUse != null)
+        if (job.verbToUse != null)
             return;
 
-        var _pawn = _driver.pawn;
-        if (_pawn == null)
+        var pawn = driver.pawn;
+        if (pawn == null)
         {
             Log.Warning($"{LogPrefix} CastJump has no pawn.");
             return;
         }
 
-        if (!HasWolfeinSprintAbility(_pawn))
+        if (!HasWolfeinSprintAbility(pawn))
             return;
 
-        var _sprintVerb = FindSprintVerb(_pawn);
-        if (_sprintVerb == null)
+        var sprintVerb = FindSprintVerb(pawn);
+        if (sprintVerb == null)
         {
-            Log.Warning($"{LogPrefix} Could not find Sprint Jump verb for " + $"{_pawn.LabelShort}.");
+            Log.Warning($"{LogPrefix} Could not find Sprint Jump verb for " + $"{pawn.LabelShort}.");
             return;
         }
 
-        _job.verbToUse = _sprintVerb;
+        job.verbToUse = sprintVerb;
     }
 
-    private static Verb FindSprintVerb(Pawn _pawn)
+    private static Verb FindSprintVerb(Pawn pawn)
     {
-        if (_pawn?.abilities?.abilities == null)
+        if (pawn?.abilities?.abilities == null)
             return null;
 
-        foreach (var _ability in _pawn.abilities.abilities)
+        foreach (var ability in pawn.abilities.abilities)
         {
-            var _verb = _ability?.verb;
+            var verb = ability?.verb;
 
-            if (IsSprintVerb(_verb))
-                return _verb;
+            if (IsSprintVerb(verb))
+                return verb;
         }
 
         return null;
     }
 
-    private static bool HasWolfeinSprintAbility(Pawn _pawn)
+    private static bool HasWolfeinSprintAbility(Pawn pawn)
     {
-        if (_pawn?.abilities?.abilities == null)
+        if (pawn?.abilities?.abilities == null)
             return false;
 
-        foreach (var _ability in _pawn.abilities.abilities)
-            if (_ability?.def?.defName == WolfeinSprintAbilityDefName)
+        foreach (var ability in pawn.abilities.abilities)
+            if (ability?.def?.defName == WolfeinSprintAbilityDefName)
                 return true;
 
         return false;
     }
 
-    private static bool IsSprintVerb(Verb _verb)
+    private static bool IsSprintVerb(Verb verb)
     {
-        return _verb?.GetType().FullName == AbilitySprintName;
+        return verb?.GetType().FullName == AbilitySprintName;
     }
 
-    private static bool IsCastJumpJob(Job _job)
+    private static bool IsCastJumpJob(Job job)
     {
-        return _job?.def?.defName == CastJumpJobDefName;
+        return job?.def?.defName == CastJumpJobDefName;
     }
 
-    private static bool IsCastJumpDriver(JobDriver _driver)
+    private static bool IsCastJumpDriver(JobDriver driver)
     {
-        return IsCastJumpJob(_driver?.job);
-    }
-
-    private sealed class SavedVerbState
-    {
-        public Job Job;
-        public Verb Verb;
+        return IsCastJumpJob(driver?.job);
     }
 }
