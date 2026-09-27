@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using HarmonyLib;
 using Multiplayer.API;
 using Multiplayer.Compat;
@@ -14,7 +15,7 @@ namespace MultiplayerWolfeinRacePatch.Source.Mods;
 ///     (captured pod comp + target). A plain sync method cannot be used here:
 ///     Multiplayer would try to serialize the compiler-generated closure
 ///     object itself, which has no sync worker.
-///     The lambda is located by signature (void with a single LocalTargetInfo
+///     The action is located by signature (void with a single LocalTargetInfo
 ///     parameter) instead of by generated name or ordinal, because the mod
 ///     update produces runtime lambda type names that name-based lookup
 ///     (MpCompat.RegisterLambdaDelegate) cannot resolve
@@ -59,10 +60,15 @@ public class WolfeinRepairUnit
         if (enterPodLambda == null)
             return;
 
-        compField = FindCompField(restPodType, enterPodLambda.DeclaringType);
+        // Action declared directly on the comp: __instance IS the comp.
+        // Action on a generated closure: resolve the comp from its field.
+        if (enterPodLambda.DeclaringType != restPodType)
+        {
+            compField = FindCompField(restPodType, enterPodLambda.DeclaringType);
 
-        if (compField == null)
-            return;
+            if (compField == null)
+                return;
+        }
 
         MpCompat.harmony.Patch(
             enterPodLambda,
@@ -79,38 +85,92 @@ public class WolfeinRepairUnit
         MP.RegisterSyncMethod(syncedMethod);
     }
 
-    // The enter-pod gizmo action is the only lambda shaped as
-    // void (LocalTargetInfo) anywhere in this type's generated code.
+    // The enter-pod gizmo action is the only method shaped as
+    // void (LocalTargetInfo) in this type's generated code. Scans nested
+    // closure/state-machine types plus the comp type itself (in case the
+    // mod refactored the lambda into a named method). On failure logs every
+    // nested type and method signature so the layout can be identified.
     private static MethodInfo FindEnterPodLambda(Type restPodType)
     {
-        var candidates = new List<MethodInfo>();
+        const BindingFlags members = BindingFlags.Public | BindingFlags.NonPublic |
+                                     BindingFlags.Instance | BindingFlags.Static |
+                                     BindingFlags.DeclaredOnly;
+
+        var matches = new List<MethodInfo>();
+        var report = new StringBuilder();
 
         foreach (var nestedType in restPodType.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
-        foreach (var candidate in nestedType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic |
-                                                        BindingFlags.Instance | BindingFlags.Static |
-                                                        BindingFlags.DeclaredOnly))
         {
-            if (candidate.ReturnType != typeof(void))
-                continue;
+            report.AppendLine($"{LogPrefix} Nested type: {nestedType.Name}");
 
-            var parms = candidate.GetParameters();
+            foreach (var candidate in nestedType.GetMethods(members))
+            {
+                report.AppendLine($"{LogPrefix}   {Describe(candidate)}");
 
-            if (parms.Length != 1 || parms[0].ParameterType != typeof(LocalTargetInfo))
-                continue;
-
-            candidates.Add(candidate);
+                if (MatchesTargetAction(candidate))
+                    matches.Add(candidate);
+            }
         }
 
-        if (candidates.Count != 1)
+        foreach (var ownMethod in restPodType.GetMethods(members))
         {
-            Log.Warning(
-                $"{LogPrefix} Expected exactly 1 enter-pod target lambda, " +
-                $"found {candidates.Count}.");
+            if (ownMethod.IsSpecialName)
+                continue;
 
-            return null;
+            if (MatchesTargetAction(ownMethod))
+            {
+                report.AppendLine($"{LogPrefix} Own match: {Describe(ownMethod)}");
+                matches.Add(ownMethod);
+            }
         }
 
-        return candidates[0];
+        if (matches.Count == 1)
+        {
+            Log.Message($"{LogPrefix} Enter-pod action: {Describe(matches[0])}.");
+            return matches[0];
+        }
+
+        Log.Warning(
+            $"{LogPrefix} Expected exactly 1 enter-pod target action, " +
+            $"found {matches.Count}. Method layout:{report}");
+
+        return null;
+    }
+
+    private static bool MatchesTargetAction(MethodInfo candidate)
+    {
+        if (candidate.ReturnType != typeof(void))
+            return false;
+
+        var parms = candidate.GetParameters();
+
+        return parms.Length == 1 && parms[0].ParameterType == typeof(LocalTargetInfo);
+    }
+
+    private static string Describe(MethodInfo candidate)
+    {
+        var builder = new StringBuilder();
+
+        builder.Append(candidate.DeclaringType?.Name ?? "?");
+        builder.Append('.');
+        builder.Append(candidate.Name);
+        builder.Append(candidate.IsStatic ? " static " : " instance ");
+        builder.Append(candidate.ReturnType.Name);
+        builder.Append('(');
+
+        var parms = candidate.GetParameters();
+
+        for (var index = 0; index < parms.Length; index++)
+        {
+            if (index > 0)
+                builder.Append(", ");
+
+            builder.Append(parms[index].ParameterType.Name);
+        }
+
+        builder.Append(')');
+
+        return builder.ToString();
     }
 
     // The closure holds the comp in a field typed exactly as the comp class
@@ -138,7 +198,7 @@ public class WolfeinRepairUnit
 
     private static bool EnterRestPodPrefix(object __instance, LocalTargetInfo target)
     {
-        var comp = compField.GetValue(__instance) as ThingComp;
+        var comp = (compField != null ? compField.GetValue(__instance) : __instance) as ThingComp;
 
         if (comp == null)
         {
