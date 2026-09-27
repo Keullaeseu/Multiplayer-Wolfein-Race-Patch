@@ -4,7 +4,7 @@ using Verse;
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
 /// <summary>
-///     Multiplayer Patch for Wolfein Race by MelonDove, Ancot, Last Update: 23 Sep @ 6:07pm 2026
+///     Multiplayer Patch for Wolfein Race by MelonDove, Ancot, Last Update: 27 Sep @ 8:08am 2026
 ///     https://steamcommunity.com/sharedfiles/filedetails/?id=3473140562
 ///     Entry point: schedules <see cref="LatePatch" /> once mods are loaded,
 ///     which delegates to one patch class per Wolfein feature.
