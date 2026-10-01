@@ -2,7 +2,7 @@
 <ModMetaData>
 	<name>Multiplayer Wolfein Race Patch</name>
 	<author>Keullaeseu</author>
-	<packageId>keullaeseu.multiplayerwolfeinracepatch</packageId>
+	<packageId>keullaeseu.mp.MelonDove.WolfeinRace</packageId>
 	<modVersion>1.0.0.4</modVersion>
 	<url>https://github.com/Keullaeseu/Multiplayer-Wolfein-Race-Patch</url>
 	<description>Provides multiplayer support for the Wolfein Race mod by MelonDove, Ancot.</description>
