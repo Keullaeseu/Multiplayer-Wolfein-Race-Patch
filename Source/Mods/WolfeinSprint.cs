@@ -1,134 +1,74 @@
 ﻿using HarmonyLib;
-using Multiplayer.Compat;
+using Multiplayer.API;
 using Verse;
-using Verse.AI;
 
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
 /// <summary>
-///     Patch Wolfein Sprint ability (Wolfein.Verb_CastAbilitySprint, a
-///     CastJump-based jump ability) to behave in Multiplayer.
-///     Ability casting + CastJump jobs are synced by Multiplayer core, so no
-///     gizmo sync is needed here. This is only a deterministic safety net:
-///     if a CastJump job ever arrives without its sprint verb (e.g. after a
-///     save/load cycle or a missed verb sync), re-attach the pawn's sprint
-///     verb deterministically instead of erroring.
+///     Syncs the Wolfein Sprint jump (Wolfein.Verb_CastAbilitySprint).
+///     Vanilla Multiplayer auto-syncs OrderForceTarget only for verb types in
+///     the RimWorld assembly. The sprint verb inherits its OrderForceTarget
+///     override from AncotLibrary.Verb_CastAbilityJump_Custom (calls
+///     JumpUtility_Custom.OrderJump, which issues a CastJump job with
+///     verbToUse), so it must be registered explicitly - the same pattern as
+///     MiliraRaceAbilityShortFly in the sibling Milira patch project (which is
+///     not modified here). Harmony only patches the declared implementation,
+///     so an override on the sprint verb itself is preferred and the Ancot
+///     base is used otherwise. The rest of the chain (TryCastShot, DoJump,
+///     flyer ticks) is pure sim and re-executes deterministically on all
+///     clients once the order is synced. The sibling Ancot patch does not
+///     sync jump verbs, so there is no double registration.
 /// </summary>
 public class WolfeinSprint
 {
     private const string LogPrefix = "[Multiplayer Wolfein Race Sprint Patch]";
 
     private const string AbilitySprintName = "Wolfein.Verb_CastAbilitySprint";
-    private const string WolfeinSprintAbilityDefName = "Wolfein_Sprint";
-    private const string CastJumpJobDefName = "CastJump";
+    private const string AbilityJumpBaseName = "AncotLibrary.Verb_CastAbilityJump_Custom";
 
-    /// <summary>
-    ///     Harmony Patch
-    /// </summary>
     public static void Patch()
     {
-        PatchStartNextToil();
+        PatchOrderForceTarget();
     }
 
-    private static void PatchStartNextToil()
+    private static void PatchOrderForceTarget()
     {
-        var method = AccessTools.Method(typeof(JobDriver), nameof(JobDriver.TryActuallyStartNextToil));
+        var sprintType = AccessTools.TypeByName(AbilitySprintName);
+
+        if (sprintType == null)
+        {
+            Log.Warning($"{LogPrefix} Type not found: {AbilitySprintName}.");
+            return;
+        }
+
+        // Prefer an override declared on the sprint verb itself: resolving
+        // through the derived type hands Harmony a method reference it
+        // refuses to patch ("Patch the declared method ... instead").
+        var method = AccessTools.DeclaredMethod(sprintType, "OrderForceTarget", new[] { typeof(LocalTargetInfo) });
+
         if (method == null)
         {
-            Log.Error($"{LogPrefix} Could not find " + "JobDriver.TryActuallyStartNextToil().");
-            return;
+            var baseType = AccessTools.TypeByName(AbilityJumpBaseName);
+
+            if (baseType == null)
+            {
+                Log.Warning($"{LogPrefix} Type not found: {AbilityJumpBaseName}.");
+                return;
+            }
+
+            // Inherited unchanged by the sprint verb (verified against
+            // Ancot-Library-Decomp and Wolfein-Race-IL): patching the base
+            // covers it through virtual dispatch.
+            method = AccessTools.DeclaredMethod(baseType, "OrderForceTarget", new[] { typeof(LocalTargetInfo) });
         }
 
-        MpCompat.harmony.Patch(
-            method,
-            new HarmonyMethod(
-                typeof(WolfeinSprint),
-                nameof(TryActuallyStartNextToilPrefix)));
-
-        Log.Message($"{LogPrefix} Patched " + "Verse.AI.JobDriver.TryActuallyStartNextToil().");
-    }
-
-    private static void TryActuallyStartNextToilPrefix(JobDriver __instance)
-    {
-        // No MP check needed: this runs in the sim on all clients, is fully
-        // deterministic (iterates the pawn's own ability list), and only fills
-        // in a missing verb. It never consumes Rand or touches the UI.
-        if (!IsCastJumpDriver(__instance))
-            return;
-
-        EnsureSprintVerb(__instance);
-    }
-
-    private static void EnsureSprintVerb(JobDriver driver)
-    {
-        var job = driver.job;
-
-        if (!IsCastJumpJob(job))
-            return;
-
-        if (job.verbToUse != null)
-            return;
-
-        var pawn = driver.pawn;
-        if (pawn == null)
+        if (method == null)
         {
-            Log.Warning($"{LogPrefix} CastJump has no pawn.");
+            Log.Warning($"{LogPrefix} Could not find OrderForceTarget(LocalTargetInfo) for {AbilitySprintName}.");
             return;
         }
 
-        if (!HasWolfeinSprintAbility(pawn))
-            return;
-
-        var sprintVerb = FindSprintVerb(pawn);
-        if (sprintVerb == null)
-        {
-            Log.Warning($"{LogPrefix} Could not find Sprint Jump verb for " + $"{pawn.LabelShort}.");
-            return;
-        }
-
-        job.verbToUse = sprintVerb;
-    }
-
-    private static Verb FindSprintVerb(Pawn pawn)
-    {
-        if (pawn?.abilities?.abilities == null)
-            return null;
-
-        foreach (var ability in pawn.abilities.abilities)
-        {
-            var verb = ability?.verb;
-
-            if (IsSprintVerb(verb))
-                return verb;
-        }
-
-        return null;
-    }
-
-    private static bool HasWolfeinSprintAbility(Pawn pawn)
-    {
-        if (pawn?.abilities?.abilities == null)
-            return false;
-
-        foreach (var ability in pawn.abilities.abilities)
-            if (ability?.def?.defName == WolfeinSprintAbilityDefName)
-                return true;
-
-        return false;
-    }
-
-    private static bool IsSprintVerb(Verb verb)
-    {
-        return verb?.GetType().FullName == AbilitySprintName;
-    }
-
-    private static bool IsCastJumpJob(Job job)
-    {
-        return job?.def?.defName == CastJumpJobDefName;
-    }
-
-    private static bool IsCastJumpDriver(JobDriver driver)
-    {
-        return IsCastJumpJob(driver?.job);
+        MP.RegisterSyncMethod(method);
+        Log.Message($"{LogPrefix} Synced {method.DeclaringType?.FullName}.OrderForceTarget.");
     }
 }

@@ -54,11 +54,13 @@ public class WolfeinFloatMenus
         }
 
         // Ordinal 0: PickUpOne, ordinal 1: PickUpAll, ordinal 2: PickUpSome
-        // (opens Dialog_Slider whose confirm callback queues the job; the
-        // dialog path is covered by syncing the outer lambda).
+        // (opens Dialog_Slider), ordinal 3: the slider confirm callback
+        // void(int count) which queues the job. The confirm must be synced
+        // too, otherwise each client queues a different pickup count.
+        // Verified against the mod IL (all four on DisplayClass7_0).
         MpCompat.RegisterLambdaDelegate(
             type,
-            methodName, 0, 1, 2);
+            methodName, 0, 1, 2, 3);
     }
 
     private static void PatchAdministerInjector()

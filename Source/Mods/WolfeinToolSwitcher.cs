@@ -1,5 +1,4 @@
 using HarmonyLib;
-using Multiplayer.Compat;
 using Verse;
 
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
@@ -10,6 +9,10 @@ namespace MultiplayerWolfeinRacePatch.Source.Mods;
 ///     The gizmo action cycles currentGroupIndex, rebuilds melee verbs,
 ///     plays a tick sound and dirties the renderer - all sim-side state
 ///     that must run on every client.
+///     The mod IL shows it as an instance method directly on the comp
+///     (b__20_0), synced by signature so ordinals cannot drift. The display
+///     classes of other methods (RemoveDefaultMeleeVerbs, queue helper) are
+///     left alone.
 /// </summary>
 public class WolfeinToolSwitcher
 {
@@ -19,20 +22,22 @@ public class WolfeinToolSwitcher
 
     public static void Patch()
     {
-        var type = AccessTools.TypeByName(CompToolSwitcher);
+        var compType = AccessTools.TypeByName(CompToolSwitcher);
 
-        if (type == null)
+        if (compType == null)
         {
             Log.Warning($"{LogPrefix} Could not find {CompToolSwitcher}.");
             return;
         }
 
-        // Ordinal 0: the mode-cycle Action in GetWeaponGizmos.
-        // Plain Action with no arguments -> RegisterLambdaMethod.
-        // Matches e.g. CommonSense DoCleanComp in Multiplayer-Compatibility.
-        MpCompat.RegisterLambdaMethod(
-            type,
-            "GetWeaponGizmos", 0);
+        var synced = WolfeinLambdaSync.SyncParentLambdas(compType, "GetWeaponGizmos", typeof(void));
+
+        if (synced != 1)
+        {
+            Log.Warning(
+                $"{LogPrefix} Expected 1 tool switcher action, synced {synced}.");
+            return;
+        }
 
         Log.Message($"{LogPrefix} Patched {CompToolSwitcher}.GetWeaponGizmos().");
     }

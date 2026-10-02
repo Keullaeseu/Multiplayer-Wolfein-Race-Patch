@@ -1,5 +1,4 @@
 using HarmonyLib;
-using Multiplayer.Compat;
 using Verse;
 
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
@@ -8,6 +7,8 @@ namespace MultiplayerWolfeinRacePatch.Source.Mods;
 ///     Energy Shield recharge gizmo (Wolfein.CompChargeEnergyShield).
 ///     The worn-gizmo action resets the shield and consumes a charge,
 ///     which is sim-side state and must run on every client.
+///     The mod IL shows it as an instance method directly on the comp
+///     (b__8_0), synced by signature so ordinals cannot drift.
 /// </summary>
 public class WolfeinEnergyShield
 {
@@ -21,13 +22,20 @@ public class WolfeinEnergyShield
 
         if (energyShieldType == null)
         {
-            Log.Warning($"{LogPrefix} Could not find {CompChargeEnergyShield}.");
+            Log.Warning(
+                $"{LogPrefix} Could not find {CompChargeEnergyShield}.");
 
             return;
         }
 
-        // Ordinal 0: the recharge Action in CompGetWornGizmosExtra.
-        MpCompat.RegisterLambdaMethod(energyShieldType, "CompGetWornGizmosExtra", 0);
+        var synced = WolfeinLambdaSync.SyncParentLambdas(energyShieldType, "CompGetWornGizmosExtra", typeof(void));
+
+        if (synced != 1)
+        {
+            Log.Warning(
+                $"{LogPrefix} Expected 1 energy shield action, synced {synced}.");
+            return;
+        }
 
         Log.Message($"{LogPrefix} Patched {CompChargeEnergyShield}.CompGetWornGizmosExtra().");
     }

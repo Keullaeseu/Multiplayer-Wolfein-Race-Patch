@@ -1,15 +1,15 @@
 using HarmonyLib;
-using Multiplayer.Compat;
 using Verse;
 
 namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
 /// <summary>
 ///     Artificial Moon toggle (Wolfein.CompCauseHediff_ArtificialMoonApparatus).
-///     CompGetGizmosExtra declares two lambdas:
-///     ordinal 0 is `isActive` (Func{bool}, UI-only getter),
-///     ordinal 1 is `toggleAction` (Action, flips switchOn + applies effects).
-///     Only the toggle needs syncing.
+///     The mod IL shows both lambdas as instance methods directly on the comp:
+///     b__21_0 is the bool isActive getter (UI-only), b__21_1 is the void
+///     toggleAction (flips switchOn + applies effects). The void return-type
+///     filter picks exactly the toggle, so the getter can never be synced by
+///     accident.
 /// </summary>
 public class WolfeinArtificialMoon
 {
@@ -23,13 +23,20 @@ public class WolfeinArtificialMoon
 
         if (compType == null)
         {
-            Log.Warning($"{LogPrefix} Could not find {CompCauseHediffArtificialMoonApparatus}.");
+            Log.Warning(
+                $"{LogPrefix} Could not find {CompCauseHediffArtificialMoonApparatus}.");
+
             return;
         }
 
-        // Ordinal 1 == toggleAction. Matches RegisterLambdaMethod usage
-        // in Multiplayer-Compatibility (e.g. CommonSense DoCleanComp, AlphaBiomes).
-        MpCompat.RegisterLambdaMethod(compType, "CompGetGizmosExtra", 1);
+        var synced = WolfeinLambdaSync.SyncParentLambdas(compType, "CompGetGizmosExtra", typeof(void));
+
+        if (synced != 1)
+        {
+            Log.Warning(
+                $"{LogPrefix} Expected 1 artificial moon toggle, synced {synced}.");
+            return;
+        }
 
         Log.Message($"{LogPrefix} Patched {CompCauseHediffArtificialMoonApparatus}.CompGetGizmosExtra().");
     }

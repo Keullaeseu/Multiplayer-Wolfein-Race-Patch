@@ -5,7 +5,7 @@ namespace MultiplayerWolfeinRacePatch.Source.Mods;
 
 /// <summary>
 ///     Multiplayer Patch for Wolfein Race by MelonDove, Ancot,
-///     Last Update: 27 Sep @ 8:08am 2026
+///     Last Update: 2 Oct @ 4:46pm 2026
 ///     <see href="https://steamcommunity.com/sharedfiles/filedetails/?id=3473140562" />
 ///     Entry point: schedules <see cref="LatePatch" /> once mods are loaded,
 ///     which delegates to one patch class per Wolfein feature.
